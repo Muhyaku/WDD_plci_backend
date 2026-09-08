@@ -7,10 +7,33 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// 1. KONEKSI MONGODB
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log('✅ BOOM! Berhasil terhubung ke MongoDB!'))
-  .catch((err) => console.error('❌ Gagal connect ke MongoDB:', err));
+// 1. KONEKSI MONGODB (CACHED CONNECTION FOR SERVERLESS)
+let cachedDb = null;
+async function connectDB() {
+  if (cachedDb && mongoose.connection.readyState === 1) {
+    return cachedDb;
+  }
+  if (!process.env.MONGO_URI) {
+    console.error('❌ MONGO_URI is missing in environment!');
+    return;
+  }
+  cachedDb = await mongoose.connect(process.env.MONGO_URI, {
+    serverSelectionTimeoutMS: 5000,
+  });
+  console.log('✅ BOOM! Berhasil terhubung ke MongoDB!');
+  return cachedDb;
+}
+connectDB().catch(err => console.error('❌ Initial DB connect error:', err));
+
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    console.error('❌ DB Middleware Error:', err);
+    res.status(500).json({ status: 'error', message: 'Koneksi Database Gagal' });
+  }
+});
 
 // 2. SCHEMA LAPORAN DARURAT
 const emergencySchema = new mongoose.Schema({
@@ -34,6 +57,7 @@ const transactionSchema = new mongoose.Schema({
   deletedAt: { type: Date, default: null },
   printCount: { type: Number, default: 0 }
 }, { timestamps: true });
+transactionSchema.index({ sheet: 1, tanggal: 1, isDeleted: 1 });
 const Transaction = mongoose.model('Transaction', transactionSchema);
 
 // 4. SCHEMA MENU MASTER (NAMA, HARGA, STOK)
@@ -46,6 +70,7 @@ const menuMasterSchema = new mongoose.Schema({
   lastUpdatedDate: { type: String, required: true }, // Format: YYYY-MM-DD
   lastRestockTime: { type: String, default: "" }
 }, { timestamps: true });
+menuMasterSchema.index({ sheet: 1, menuId: 1 });
 const MenuMaster = mongoose.model('MenuMaster', menuMasterSchema);
 
 // 5. SCHEMA ACTIVITY LOG
@@ -58,6 +83,7 @@ const activityLogSchema = new mongoose.Schema({
   dateString: { type: String, required: true },
   isDeleted: { type: Boolean, default: false }
 }, { timestamps: true });
+activityLogSchema.index({ sheet: 1, isDeleted: 1, createdAt: -1 });
 const ActivityLog = mongoose.model('ActivityLog', activityLogSchema);
 
 // ==========================================
